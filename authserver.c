@@ -7,17 +7,29 @@
 #include <netinet/in.h>
 #include <fcntl.h>
 
+enum {
+    MAX_PORT = 65535
+};
+
 typedef struct
 {
+    unsigned char r[20];
+    uint64_t T;
     char login[256];
-    // Resto de campos key, nonce, timestamp...
-} client;
+    
+} response;
 
 typedef struct
 {
     uint64_t high;
     uint64_t low;
 } nonce;
+
+void
+usage()
+{
+    errx(EXIT_FAILURE,"usage: ./authserver file [int]");
+}
 
 int
 to_int(char *str)
@@ -27,22 +39,15 @@ to_int(char *str)
     
 
     port = strtol(str,&endptr,10);
-    if (port < 0 || port > INT_MAX || *endptr != '\0') {
+    if (port < 1 || port > MAX_PORT || *endptr != '\0') {
         errx(EXIT_FAILURE, "error: bad value %s", str);
     }
-
+    
     return (int)port;
-}
-
-void
-usage()
-{
-    errx(EXIT_FAILURE,"usage: ./authserver file [int]");
 }
 
 nonce
 create_nonce(int *cont) {
-    // Parte pseudoaleatoria de 64 bits que se lee de /dev/urandom
     nonce n;
     int urandom_fd;
 
@@ -69,9 +74,14 @@ main(int argc, char *argv[])
     struct sockaddr_in sin;
     struct sockaddr sclient;
     socklen_t addrlen;
+    nonce nonce;
+    response response;
     int port = 9999;
     int fd;
     int sockfd;
+    int cont = 0;
+    int total = 0;
+    int bytes;
 
     if (argc < 2) {
         usage();
@@ -101,10 +111,30 @@ main(int argc, char *argv[])
             err(1, "accept failed");
         }
 
-        // Crear el nonce concatenando un numero aleatorio de 64 bits y el contador
-        // Mandar el nonce
+        nonce = create_nonce(&cont);
         
+        if (send(sockfd,&nonce,sizeof(nonce),0) != sizeof(nonce)) {
+            err(EXIT_FAILURE,"send response failed");
+        }
 
+        // Recibir el HMACSHA1(nonce||T,key), T y login como un struct
+        while (total <= sizeof(response)) {
+            bytes = recv(sockfd,&response,sizeof(response),0);
+
+            if (bytes < 0) {
+                err(EXIT_FAILURE,"recv response failed");
+            }
+
+            if (bytes == 0) {
+                errx(EXIT_FAILURE,"connection closed prematurely");
+            }
+
+            total += bytes;
+        }
+
+        // Comprobar el timeout
+
+        
         close(fd);
     }
 
