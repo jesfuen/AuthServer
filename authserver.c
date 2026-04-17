@@ -61,7 +61,7 @@ create_nonce(int *cont) {
     }
 
     close(urandom_fd);
-    *cont++;
+    (*cont)++;
     n.low = (uint64_t)*cont;
 
     return n;
@@ -113,13 +113,12 @@ main(int argc, char *argv[])
 
         nonce = create_nonce(&cont);
         
-        if (send(sockfd,&nonce,sizeof(nonce),0) != sizeof(nonce)) {
+        if (send(fd,&nonce,sizeof(nonce),0) != sizeof(nonce)) {
             err(EXIT_FAILURE,"send response failed");
         }
 
-        // Recibir el HMACSHA1(nonce||T,key), T y login como un struct
         while (total <= sizeof(response)) {
-            bytes = recv(sockfd,&response,sizeof(response),0);
+            bytes = recv(fd,&response,sizeof(response),0);
 
             if (bytes < 0) {
                 err(EXIT_FAILURE,"recv response failed");
