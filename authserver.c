@@ -1,82 +1,11 @@
+#include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <err.h>
-#include <errno.h>
 #include <signal.h>
-#include <limits.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <fcntl.h>
-#include <time.h>
-
-enum {
-    MAX_PORT = 65535,
-    TIMEOUT = 10,
-};
-
-typedef struct
-{
-    unsigned char r[20];
-    uint64_t T;
-    char login[256];
-    
-} response;
-
-typedef struct
-{
-    uint64_t high;
-    uint64_t low;
-} nonce;
-
-void
-usage()
-{
-    errx(EXIT_FAILURE,"usage: ./authserver file [int]");
-}
-
-int
-to_int(char *str)
-{
-    long port;
-    char *endptr;
-    
-
-    port = strtol(str,&endptr,10);
-    if (port < 1 || port > MAX_PORT || *endptr != '\0') {
-        errx(EXIT_FAILURE, "error: bad value %s", str);
-    }
-    
-    return (int)port;
-}
-
-nonce
-create_nonce(int *cont) {
-    nonce n;
-    int urandom_fd;
-
-    urandom_fd = open("/dev/urandom",O_RDONLY);
-    if (urandom_fd < 0) {
-        err(EXIT_FAILURE,"error: open /dev/urandom failed");
-    }
-
-    if (read(urandom_fd,&n.high,sizeof(n.high)) != sizeof(n.high)) {
-        err(EXIT_FAILURE,"error: read /dev/urandom failed");
-    }
-
-    close(urandom_fd);
-    (*cont)++;
-    n.low = (uint64_t)*cont;
-
-    return n;
-
-}
-
-void
-handle_alarm(int sig)
-{
-    (void)sig;
-}
 
 int
 main(int argc, char *argv[])
@@ -86,13 +15,10 @@ main(int argc, char *argv[])
     socklen_t addrlen;
     nonce nonce;
     response response;
-    uint64_t t_server;
     int port = 9999;
     int fd;
     int sockfd;
     int cont = 0;
-    int total;
-    int bytes;
 
     if (argc < 2) {
         usage();
@@ -126,49 +52,20 @@ main(int argc, char *argv[])
         }
 
         nonce = create_nonce(&cont);
-        
-        if (send(fd,&nonce,sizeof(nonce),0) != sizeof(nonce)) {
-            err(EXIT_FAILURE,"error: send response failed");
-        }
+        send_all(fd, &nonce, sizeof(nonce));
 
         alarm(TIMEOUT);
+        recv_all(fd, &response, sizeof(response));
 
-        total = 0;
-        while (total < sizeof(response)) {
-            bytes = recv(fd,(char *)&response + total,sizeof(response) - total,0);
-
-            if (bytes < 0) {
-                if (errno == EINTR) {
-                    alarm(0);
-                    errx(EXIT_FAILURE,"error: timeout!");
-                }
-                err(EXIT_FAILURE,"error: recv response failed");
-            }
-
-            if (bytes == 0) {
-                alarm(0);
-                errx(EXIT_FAILURE,"error: connection closed prematurely");
-            }
-
-            total += bytes;
-        }
-
-        alarm(0);
-
-        t_server = (uint64_t)time(NULL);
-        // Comprobar el timestamp menor a 5 minutos
-        if ((t_server - response.T) > 300) {
-            errx(EXIT_FAILURE,"error: timestamp expired");
-        }
+        check_timestamp(response.T);
 
         // Calcular el HMAC-SHA1 con el nonce, T y key mapeada con el login
+        
 
         // Mapear el login -> Ir leyendo hasta encontrar el usuario o leer y almacenar varios struct cliente con login y key
 
         // Usar hmac-sha1 guardada en utils.c
-        
-
-        
+         
         close(fd);
     }
 
