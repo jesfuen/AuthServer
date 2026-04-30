@@ -1,28 +1,48 @@
 #include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <err.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
+#include <openssl/evp.h>
+
+static void
+usage(void)
+{
+    errx(EXIT_FAILURE, "usage: ./authserver file [port]");
+}
 
 int
 main(int argc, char *argv[])
 {
     struct sockaddr_in sin;
-    struct sockaddr sclient;
+    struct sockaddr_in sclient;
     socklen_t addrlen;
     nonce nonce;
     response response;
     int port = 9999;
+    account *accounts;
+    int naccounts;
     int fd;
     int sockfd;
     int cont = 0;
+    char client_ip[INET_ADDRSTRLEN];
+    unsigned char resp_buf[20 + 8 + 256];
+    int ok;
+    account *acc;
+    unsigned char data[sizeof(nonce) + sizeof(response.T)];
+    unsigned char hmac[EVP_MAX_MD_SIZE];
+    unsigned int hmac_len;
 
     if (argc < 2) {
         usage();
     }
+
+    accounts = read_accounts(argv[1], &naccounts);
 
     if (argc == 3) {
         port = to_int(argv[2]);
@@ -46,26 +66,55 @@ main(int argc, char *argv[])
 
     for(;;){
         addrlen = sizeof(sclient);
-        fd = accept(sockfd, &sclient, &addrlen);
+        fd = accept(sockfd, (struct sockaddr *)&sclient, &addrlen);
         if(fd < 0){
             err(1, "accept failed");
         }
 
+        inet_ntop(AF_INET, &sclient.sin_addr, client_ip, sizeof(client_ip));
+
         nonce = create_nonce(&cont);
         send_all(fd, &nonce, sizeof(nonce));
-
         alarm(TIMEOUT);
-        recv_all(fd, &response, sizeof(response));
+        recv_all(fd, resp_buf, sizeof(resp_buf));
+        memcpy(response.r, resp_buf, 20);
+        memcpy(&response.T, resp_buf + 20, sizeof(response.T));
+        memcpy(response.login, resp_buf + 28, 256);
 
-        check_timestamp(response.T);
+        ok = 1;
 
-        // Calcular el HMAC-SHA1 con el nonce, T y key mapeada con el login
-        
+        if (check_timestamp(response.T) < 0) {
+            ok = 0;
+        }
 
-        // Mapear el login -> Ir leyendo hasta encontrar el usuario o leer y almacenar varios struct cliente con login y key
+        acc = NULL;
+        if (ok) {
+            for (int i = 0; i < naccounts; i++) {
+                if (strncmp(accounts[i].login, response.login, sizeof(response.login)) == 0) {
+                    acc = &accounts[i];
+                    break;
+                }
+            }
+            if (acc == NULL)
+                ok = 0;
+        }
 
-        // Usar hmac-sha1 guardada en utils.c
-         
+        if (ok) {
+            memcpy(data, &nonce, sizeof(nonce));
+            memcpy(data + sizeof(nonce), &response.T, sizeof(response.T));
+
+            compute_hmac(acc->key, sizeof(acc->key), data, sizeof(data), hmac, &hmac_len);
+
+            if (hmac_len != sizeof(response.r) || memcmp(hmac, response.r, sizeof(response.r)) != 0)
+                ok = 0;
+        }
+
+        if (ok)
+            printf("SUCCESS, %s from %s\n", response.login, client_ip);
+        else
+            printf("FAILURE, %s from %s\n", response.login, client_ip);
+
+        send_all(fd, ok ? "SUCCESS" : "FAILURE", 8);
         close(fd);
     }
 
